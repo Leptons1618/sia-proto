@@ -1,0 +1,26 @@
+[agent]
+# memory budget in MB
+memory_budget = 200
+# disk quota in MB
+disk_quota = 500
+# collection intervals (seconds)
+cpu_interval = 5
+proc_interval = 10
+# ring buffer sizes
+event_ring_capacity = 10000
+
+
+[ipc]
+# path for unix socket on unix; on windows use named pipe name
+socket_path = "/tmp/sia.sock"
+
+
+[llm]
+# prefer ollama http if available
+# Try localhost first, then Windows host IP
+ollama_url = "http://localhost:11434"
+model = "llama3.2"
+
+
+[storage]
+db_path = "./sia.db"
