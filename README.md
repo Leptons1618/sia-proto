@@ -1,10 +1,8 @@
 # SIA — System Insight Agent (prototype)
 
-**Status**: ✅ MVP Complete and Working!
-
 This repository contains a working prototype of the local-first System Insight Agent with CPU/memory monitoring, event analysis, LLM integration (Ollama), and a beautiful CLI.
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 # Terminal 1: Start the agent
@@ -16,17 +14,15 @@ cargo run -p sia-cli -- status
 cargo run -p sia-cli -- list
 ```
 
-See **[QUICKSTART.md](QUICKSTART.md)** for detailed setup and usage.
+## Features
 
-## ✨ Features
-
-- ✅ **CPU & Memory Monitoring** - Detects high usage and generates events
-- ✅ **Event Analysis** - Processes and stores events to SQLite
-- ✅ **LLM Integration** - Optional Ollama support for AI-powered suggestions
-- ✅ **IPC Server** - JSON-RPC protocol over Unix sockets
-- ✅ **Beautiful CLI** - Formatted status, list, and event details
-- ✅ **Configuration** - TOML-based with sane defaults
-- ✅ **Logging** - Structured logging with env_logger
+- **CPU & Memory Monitoring** - Detects high usage and generates events
+- **Event Analysis** - Processes and stores events to SQLite
+- **LLM Integration** - Optional Ollama support for AI-powered suggestions
+- **IPC Server** - JSON-RPC protocol over Unix sockets
+- **Beautiful CLI** - Formatted status, list, and event details
+- **Configuration** - TOML-based with sane defaults
+- **Logging** - Structured logging with env_logger
 
 ## Structure
 - `common/` - Shared types and logic (events, services, grants)
