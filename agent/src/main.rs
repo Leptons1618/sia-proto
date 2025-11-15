@@ -11,10 +11,12 @@ mod llm;
 
 use collectors::start_collectors;
 use analyzer::start_analyzer;
-use ipc::start_ipc_server;
+use ipc::{start_ipc_server, MetricsHandle, SystemMetrics};
 use storage::Storage;
 use llm::LlmClient;
 use common::Config;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,16 +55,19 @@ async fn main() -> Result<()> {
     // Create event channel
     let (tx, rx) = mpsc::channel(config.agent.event_ring_capacity);
     
+    // Create shared metrics handle
+    let metrics: MetricsHandle = Arc::new(RwLock::new(SystemMetrics::default()));
+    
     // Start collectors
-    start_collectors(tx, config.agent.cpu_interval).await?;
+    start_collectors(tx, config.agent.cpu_interval, metrics.clone()).await?;
     info!("Collectors started");
     
     // Start analyzer
-    start_analyzer(rx, storage.clone(), llm_available).await?;
+    start_analyzer(rx, storage.clone(), llm_available.clone()).await?;
     info!("Analyzer started");
     
     // Start IPC server
-    start_ipc_server(storage.clone(), config.ipc.socket_path.clone()).await?;
+    start_ipc_server(storage.clone(), config.ipc.socket_path.clone(), metrics, llm_available).await?;
     info!("IPC server started on {}", config.ipc.socket_path);
     
     info!("SIA agent is running");

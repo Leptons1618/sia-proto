@@ -1,12 +1,26 @@
 use crate::storage::Storage;
+use crate::llm::LlmClient;
+use common::Event;
 use anyhow::Result;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use log::{info, error, warn};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 static START_TIME: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+#[derive(Clone, Default)]
+pub struct SystemMetrics {
+    pub cpu_usage: f32,
+    pub memory_used_mb: u64,
+    pub memory_total_mb: u64,
+    pub memory_percent: f32,
+}
+
+pub type MetricsHandle = Arc<RwLock<SystemMetrics>>;
 
 #[derive(Deserialize)]
 #[serde(tag = "method")]
@@ -17,6 +31,8 @@ enum IpcRequest {
     List { limit: Option<i32> },
     #[serde(rename = "show")]
     Show { event_id: String },
+    #[serde(rename = "analyze")]
+    Analyze { event_id: String },
 }
 
 #[derive(Serialize)]
@@ -25,7 +41,7 @@ struct IpcResponse {
     data: serde_json::Value,
 }
 
-pub async fn start_ipc_server(storage: Storage, socket_path: String) -> Result<()> {
+pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: MetricsHandle, llm_client: Option<LlmClient>) -> Result<()> {
     // Remove old socket if exists
     let _ = std::fs::remove_file(&socket_path);
     
@@ -54,8 +70,10 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String) -> Result<(
             match listener.accept().await {
                 Ok((stream, _)) => {
                     let storage = storage.clone();
+                    let metrics = metrics.clone();
+                    let llm_client = llm_client.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, storage).await {
+                        if let Err(e) = handle_client(stream, storage, metrics, llm_client).await {
                             error!("Client error: {}", e);
                         }
                     });
@@ -70,7 +88,7 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String) -> Result<(
     Ok(())
 }
 
-async fn handle_client(mut stream: UnixStream, storage: Storage) -> Result<()> {
+async fn handle_client(mut stream: UnixStream, storage: Storage, metrics: MetricsHandle, llm_client: Option<LlmClient>) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
     let n = stream.read(&mut buffer).await?;
     
@@ -82,7 +100,7 @@ async fn handle_client(mut stream: UnixStream, storage: Storage) -> Result<()> {
     info!("IPC request: {}", request_str.trim());
     
     let response = match serde_json::from_str::<IpcRequest>(&request_str) {
-        Ok(req) => handle_request(req, &storage).await,
+        Ok(req) => handle_request(req, &storage, &metrics, llm_client.as_ref()).await,
         Err(e) => {
             warn!("Invalid request: {}", e);
             IpcResponse {
@@ -99,21 +117,24 @@ async fn handle_client(mut stream: UnixStream, storage: Storage) -> Result<()> {
     Ok(())
 }
 
-async fn handle_request(req: IpcRequest, storage: &Storage) -> IpcResponse {
+async fn handle_request(req: IpcRequest, storage: &Storage, metrics: &MetricsHandle, llm_client: Option<&LlmClient>) -> IpcResponse {
     match req {
-        IpcRequest::Status => handle_status(storage).await,
+        IpcRequest::Status => handle_status(storage, metrics).await,
         IpcRequest::List { limit } => handle_list(storage, limit.unwrap_or(20)).await,
         IpcRequest::Show { event_id } => handle_show(storage, &event_id).await,
+        IpcRequest::Analyze { event_id } => handle_analyze(storage, &event_id, llm_client).await,
     }
 }
 
-async fn handle_status(storage: &Storage) -> IpcResponse {
+async fn handle_status(storage: &Storage, metrics: &MetricsHandle) -> IpcResponse {
     let uptime_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() - START_TIME.get().unwrap_or(&0);
     
     let (critical, warning, info) = storage.get_event_counts().await.unwrap_or((0, 0, 0));
+    
+    let metrics_guard = metrics.read().await;
     
     IpcResponse {
         success: true,
@@ -123,6 +144,12 @@ async fn handle_status(storage: &Storage) -> IpcResponse {
             "collectors": {
                 "cpu": "active",
                 "memory": "active"
+            },
+            "metrics": {
+                "cpu_usage": metrics_guard.cpu_usage,
+                "memory_used_mb": metrics_guard.memory_used_mb,
+                "memory_total_mb": metrics_guard.memory_total_mb,
+                "memory_percent": metrics_guard.memory_percent
             },
             "events": {
                 "critical": critical,
@@ -190,6 +217,96 @@ async fn handle_show(storage: &Storage, event_id: &str) -> IpcResponse {
             IpcResponse {
                 success: false,
                 data: serde_json::json!({"error": format!("Database error: {}", e)}),
+            }
+        }
+    }
+}
+
+async fn handle_analyze(storage: &Storage, event_id: &str, llm_client: Option<&LlmClient>) -> IpcResponse {
+    // First get the event
+    let event_result = storage.get_event_by_id(event_id).await;
+    
+    let event = match event_result {
+        Ok(Some(e)) => e,
+        Ok(None) => {
+            return IpcResponse {
+                success: false,
+                data: serde_json::json!({"error": format!("Event {} not found", event_id)}),
+            };
+        }
+        Err(e) => {
+            return IpcResponse {
+                success: false,
+                data: serde_json::json!({"error": format!("Database error: {}", e)}),
+            };
+        }
+    };
+    
+    // Check if LLM is available
+    let llm_client = match llm_client {
+        Some(client) => client,
+        None => {
+            return IpcResponse {
+                success: false,
+                data: serde_json::json!({"error": "LLM client not available. Make sure Ollama is running and configured."}),
+            };
+        }
+    };
+    
+    // Parse event data - snapshot contains concatenated JSON bytes
+    // Try to parse as single JSON first, if that fails, try to split
+    let snapshot_str = String::from_utf8_lossy(&event.snapshot);
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot_str)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    
+    // Extract entity and evidence from snapshot
+    // The snapshot may have entity/evidence fields or be the entity itself
+    let entity = snapshot.get("entity").cloned()
+        .or_else(|| {
+            // If no entity field, the snapshot itself might be the entity
+            if snapshot.is_object() && (snapshot.get("cpu_usage").is_some() || 
+                                        snapshot.get("memory_percent").is_some() ||
+                                        snapshot.get("type").is_some()) {
+                Some(snapshot.clone())
+            } else {
+                Some(serde_json::json!({}))
+            }
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    
+    let evidence = snapshot.get("evidence").cloned()
+        .unwrap_or_else(|| serde_json::json!({
+            "timestamp": event.ts,
+            "threshold": "unknown"
+        }));
+    
+    // Reconstruct Event struct for LLM
+    let event_for_llm = Event {
+        event_id: event.event_id.clone(),
+        ts: event.ts.to_string(),
+        severity: event.severity.clone(),
+        r#type: event.type_.clone(),
+        entity,
+        evidence,
+        suggestion: None,
+        status: event.status.clone(),
+    };
+    
+    // Get LLM analysis
+    match llm_client.analyze_event(&event_for_llm).await {
+        Ok(suggestion) => {
+            IpcResponse {
+                success: true,
+                data: serde_json::json!({
+                    "event_id": event.event_id,
+                    "suggestion": suggestion,
+                }),
+            }
+        }
+        Err(e) => {
+            IpcResponse {
+                success: false,
+                data: serde_json::json!({"error": format!("LLM analysis failed: {}", e)}),
             }
         }
     }

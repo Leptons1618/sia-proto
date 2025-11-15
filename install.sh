@@ -80,7 +80,8 @@ sed -i "s|db_path = \"./sia.db\"|db_path = \"/var/lib/sia/sia.db\"|g" "$CONFIG_D
 # Initialize database with schema
 if [ ! -f "$DATA_DIR/sia.db" ]; then
     echo "💾 Initializing database..."
-    su - sia -s /bin/bash -c "sqlite3 $DATA_DIR/sia.db < $PWD/sql/schema.sql"
+    SCHEMA_FILE="$(cd "$(dirname "$0")" && pwd)/sql/schema.sql"
+    cat "$SCHEMA_FILE" | su -s /bin/bash sia -c "sqlite3 $DATA_DIR/sia.db"
 fi
 
 # Install systemd service

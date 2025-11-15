@@ -3,21 +3,35 @@ use tokio::time::{sleep, Duration};
 use tokio::sync::mpsc;
 use common::Event;
 use log::{info, warn};
+use crate::ipc::MetricsHandle;
 
-pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64) -> anyhow::Result<()> {
+pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metrics: MetricsHandle) -> anyhow::Result<()> {
     info!("Starting collectors with {}s CPU interval", cpu_interval);
     
     // CPU collector
     let tx_cpu = tx.clone();
+    let metrics_cpu = metrics.clone();
     tokio::spawn(async move {
         let mut sys = System::new_all();
         let mut high_cpu_count = 0;
         
+        // Initial refresh to initialize CPU info
+        sys.refresh_cpu();
+        sleep(Duration::from_millis(250)).await; // Wait for accurate measurement
+        
         loop {
+            // Refresh CPU info and wait for accurate measurement
             sys.refresh_cpu();
-            sys.refresh_memory();
+            sleep(Duration::from_millis(250)).await;
+            sys.refresh_cpu();
             
             let cpu_usage = sys.global_cpu_info().cpu_usage();
+            
+            // Update metrics
+            {
+                let mut metrics_guard = metrics_cpu.write().await;
+                metrics_guard.cpu_usage = cpu_usage;
+            }
             
             // Generate events based on thresholds
             if cpu_usage > 95.0 {
@@ -36,12 +50,19 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64) -> any
                 high_cpu_count = 0;
             }
             
-            sleep(Duration::from_secs(cpu_interval)).await;
+            // Sleep for the remaining interval (minus the 250ms we already waited)
+            let sleep_duration = if cpu_interval > 0 {
+                Duration::from_secs(cpu_interval).saturating_sub(Duration::from_millis(250))
+            } else {
+                Duration::from_secs(1)
+            };
+            sleep(sleep_duration).await;
         }
     });
     
     // Memory collector
     let tx_mem = tx.clone();
+    let metrics_mem = metrics.clone();
     tokio::spawn(async move {
         let mut sys = System::new_all();
         
@@ -51,6 +72,14 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64) -> any
             let total_mem = sys.total_memory();
             let used_mem = sys.used_memory();
             let mem_percent = (used_mem as f32 / total_mem as f32) * 100.0;
+            
+            // Update metrics
+            {
+                let mut metrics_guard = metrics_mem.write().await;
+                metrics_guard.memory_used_mb = used_mem / 1024 / 1024;
+                metrics_guard.memory_total_mb = total_mem / 1024 / 1024;
+                metrics_guard.memory_percent = mem_percent;
+            }
             
             if mem_percent > 95.0 {
                 warn!("Critical memory usage: {:.1}%", mem_percent);
