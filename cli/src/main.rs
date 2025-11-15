@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
 }
 
 async fn send_request(method: &str, limit: Option<i32>, event_id: Option<String>) -> Result<IpcResponse> {
-    let socket_path = "/tmp/sia.sock";
+    let socket_path = "/run/sia/sia.sock";
     let mut stream = UnixStream::connect(socket_path).await?;
     
     let request = IpcRequest {
@@ -198,12 +198,11 @@ fn format_uptime(seconds: u64) -> String {
 }
 
 fn format_timestamp(ts: i64) -> String {
-    use chrono::{DateTime, Utc, TimeZone};
+    use chrono::{Utc, TimeZone};
     
-    if let Some(dt) = Utc.timestamp_opt(ts, 0).single() {
-        dt.format("%Y-%m-%d %H:%M:%S").to_string()
-    } else {
-        "Invalid timestamp".to_string()
+    match Utc.timestamp_opt(ts, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        _ => "Invalid timestamp".to_string(),
     }
 }
 

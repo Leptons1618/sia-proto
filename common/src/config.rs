@@ -42,7 +42,8 @@ impl Config {
         Ok(config)
     }
 
-    pub fn default_path() -> &'static str {
-        "./config/default.toml"
+    pub fn default_path() -> String {
+        std::env::var("SIA_CONFIG")
+            .unwrap_or_else(|_| "./config/default.toml".to_string())
     }
 }

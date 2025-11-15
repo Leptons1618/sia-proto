@@ -23,8 +23,9 @@ async fn main() -> Result<()> {
     info!("Starting SIA agent (MVP prototype)");
     
     // Load configuration
-    let config = Config::load(Config::default_path())?;
-    info!("Config loaded from {}", Config::default_path());
+    let config_path = Config::default_path();
+    let config = Config::load(&config_path)?;
+    info!("Config loaded from {}", config_path);
     
     // Initialize storage
     let storage = Storage::new(&config.storage.db_path).await?;

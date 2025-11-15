@@ -30,6 +30,15 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String) -> Result<(
     let _ = std::fs::remove_file(&socket_path);
     
     let listener = UnixListener::bind(&socket_path)?;
+    
+    // Set socket permissions to 0666 (read/write for all users)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o666);
+        std::fs::set_permissions(&socket_path, perms)?;
+    }
+    
     info!("IPC server listening on {}", socket_path);
     
     // Store start time
