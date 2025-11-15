@@ -4,14 +4,14 @@ A local-first system monitoring and analysis tool with CPU/memory monitoring, ev
 
 ## Features
 
-- ✅ **CPU & Memory Monitoring** - Detects high usage and generates events
-- ✅ **Event Analysis** - Processes and stores events to SQLite
-- ✅ **LLM Integration** - Optional Ollama support for AI-powered suggestions
-- ✅ **IPC Server** - JSON-RPC protocol over Unix sockets
-- ✅ **Beautiful CLI** - Formatted status, list, and event details
-- ✅ **Systemd Service** - Run as a persistent system service
-- ✅ **Configuration** - TOML-based with environment variable support
-- ✅ **Logging** - Structured logging with journal integration
+- **CPU & Memory Monitoring** - Detects high usage and generates events
+- **Event Analysis** - Processes and stores events to SQLite
+- **LLM Integration** - Optional Ollama support for AI-powered suggestions
+- **IPC Server** - JSON-RPC protocol over Unix sockets
+- **Beautiful CLI** - Formatted status, list, and event details
+- **Systemd Service** - Run as a persistent system service
+- **Configuration** - TOML-based with environment variable support
+- **Logging** - Structured logging with journal integration
 
 ## Quick Start
 
@@ -169,15 +169,15 @@ The project uses:
 ## What's Working
 
 Current MVP features:
-- ✅ Agent runs as systemd service or manually
-- ✅ CPU and memory monitoring (5s interval)
-- ✅ Event generation on threshold breaches
-- ✅ SQLite storage with queries
-- ✅ Unix socket IPC with JSON-RPC
-- ✅ CLI with status/list/show commands
-- ✅ Ollama LLM integration (optional)
-- ✅ System-wide installation
-- ✅ Auto-start on boot
+- Agent runs as systemd service or manually
+- CPU and memory monitoring (5s interval)
+- Event generation on threshold breaches
+- SQLite storage with queries
+- Unix socket IPC with JSON-RPC
+- CLI with status/list/show commands
+- Ollama LLM integration (optional)
+- System-wide installation
+- Auto-start on boot
 
 ## License
 
