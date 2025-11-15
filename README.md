@@ -181,7 +181,7 @@ Current MVP features:
 
 ## License
 
-[Add your license here]
+[LICENSE](LICENSE)
 
 ## Contributing
 
