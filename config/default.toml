@@ -9,6 +9,17 @@ proc_interval = 10
 # ring buffer sizes
 event_ring_capacity = 10000
 
+# Thresholds for event generation
+[agent.thresholds]
+# CPU usage thresholds (percentage)
+cpu_warning = 80.0      # Warning threshold
+cpu_critical = 95.0     # Critical threshold
+cpu_sustained_count = 2 # Number of consecutive checks before warning
+
+# Memory usage thresholds (percentage)
+memory_warning = 85.0   # Warning threshold
+memory_critical = 95.0  # Critical threshold
+
 
 [ipc]
 # path for unix socket on unix; on windows use named pipe name

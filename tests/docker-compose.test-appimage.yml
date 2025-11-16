@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  test-appimage:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-appimage
+    image: sia-appimage-test:latest
+    container_name: sia-appimage-test
+    # Enable FUSE for AppImage support
+    privileged: true
+    # Keep container running for inspection
+    stdin_open: true
+    tty: true
+    volumes:
+      # Mount the build directory to see the AppImage on host
+      - ./appimage-build:/build/appimage-build
+

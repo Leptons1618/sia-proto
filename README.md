@@ -44,10 +44,30 @@ After installation:
 - Data: `/var/lib/sia/sia.db`
 - Socket: `/run/sia/sia.sock`
 
+### Update
+
+Update SIA to the latest version:
+
+```bash
+sudo ./update.sh
+```
+
 ### Uninstall
+
+Remove SIA from your system:
 
 ```bash
 sudo ./uninstall.sh
+```
+
+### AppImage (Portable)
+
+Build a portable AppImage package:
+
+```bash
+./build-appimage.sh
+chmod +x appimage-build/sia-x86_64.AppImage
+./appimage-build/sia-x86_64.AppImage
 ```
 
 ### Development Mode
@@ -58,9 +78,15 @@ For development without system installation:
 # Terminal 1: Start the agent
 RUST_LOG=info cargo run -p sia-agent
 
-# Terminal 2: Use the CLI
-cargo run -p sia-cli -- status
-cargo run -p sia-cli -- list
+# Terminal 2: Use the TypeScript CLI
+cd cli-ts
+npm install
+npm run build
+node dist/index.js status
+node dist/index.js list
+
+# Or run interactively
+node dist/index.js
 ```
 
 **Note**: In dev mode, keep the agent terminal running. Closing it will cause "Connection refused" errors.
@@ -77,27 +103,34 @@ cargo run -p sia-cli -- list
 ```
 sia-proto/
 ├── common/         # Shared types and configuration
-├── agent/          # Background monitoring service
-├── cli/            # Command line interface
+├── agent/          # Background monitoring service (Rust)
+├── cli-ts/         # TypeScript CLI with TUI
 ├── config/         # Configuration files
 ├── sql/            # Database schema
 ├── docs/           # Documentation
 ├── install.sh      # System installation script
-└── uninstall.sh    # Uninstallation script
+├── update.sh       # Update script
+├── uninstall.sh    # Uninstallation script
+└── build-appimage.sh  # AppImage build script
 ```
 
 ## Prerequisites
 
-- Rust toolchain (1.70+)
+- Rust toolchain (1.70+) - for building the agent
+- Node.js (18+) and npm - for building the TypeScript CLI
 - SQLite3 development libraries
 - Linux with systemd (for service installation)
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install build-essential libsqlite3-dev
+sudo apt-get install build-essential libsqlite3-dev nodejs npm
 
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install Node.js (if not available via apt)
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
 ```
 
 ## Building from Source
@@ -155,16 +188,21 @@ Environment variable: `SIA_CONFIG=/path/to/config.toml`
 
 ## Dependencies
 
-The project uses:
+**Backend (Rust):**
 - **tokio** - Async runtime
 - **serde/serde_json** - Serialization
 - **sqlx** - Async SQLite database
 - **sysinfo** - System information collection
-- **clap** - CLI argument parsing
 - **anyhow** - Error handling
 - **reqwest** - HTTP client for Ollama
 - **chrono** - Timestamp handling
 - **log/env_logger** - Logging
+
+**CLI (TypeScript):**
+- **ink** - React-based TUI framework
+- **react** - UI library
+- **chalk** - Terminal colors
+- **node.js** - Runtime
 
 ## What's Working
 

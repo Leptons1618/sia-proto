@@ -40,6 +40,12 @@ echo "🗑️  Removing binaries..."
 rm -f "$INSTALL_DIR/sia-agent"
 rm -f "$INSTALL_DIR/sia-cli"
 
+# Remove TypeScript CLI files
+if [ -d "/usr/lib/sia/cli-ts" ]; then
+    echo "🗑️  Removing TypeScript CLI..."
+    rm -rf /usr/lib/sia/cli-ts
+fi
+
 # Ask before removing data
 echo ""
 read -p "❓ Remove configuration and data? ($CONFIG_DIR, $DATA_DIR) [y/N]: " -n 1 -r

@@ -1,6 +1,6 @@
 use crate::storage::Storage;
 use crate::llm::LlmClient;
-use common::Event;
+use common::{Event, ThresholdsConfig};
 use anyhow::Result;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9,8 +9,10 @@ use log::{info, error, warn};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static START_TIME: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+static LLM_CONNECTION_CACHE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 #[derive(Clone, Default)]
 pub struct SystemMetrics {
@@ -41,7 +43,7 @@ struct IpcResponse {
     data: serde_json::Value,
 }
 
-pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: MetricsHandle, llm_client: Option<LlmClient>) -> Result<()> {
+pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: MetricsHandle, llm_client: Option<LlmClient>, thresholds: ThresholdsConfig) -> Result<()> {
     // Remove old socket if exists
     let _ = std::fs::remove_file(&socket_path);
     
@@ -65,6 +67,30 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: Me
             .as_secs()
     });
     
+    // Initialize LLM connection cache and test connection once
+    if let Some(ref client) = llm_client {
+        let cache = LLM_CONNECTION_CACHE.get_or_init(|| Arc::new(AtomicBool::new(false)));
+        let cache_clone = cache.clone();
+        let client_clone = client.clone();
+        tokio::spawn(async move {
+            // Test connection once on startup
+            if let Ok(connected) = client_clone.test_connection().await {
+                cache_clone.store(connected, Ordering::Relaxed);
+                if connected {
+                    info!("LLM connection verified and cached");
+                }
+            }
+            // Periodically refresh connection status (every 30 seconds)
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                if let Ok(connected) = client_clone.test_connection().await {
+                    cache_clone.store(connected, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+    
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -72,8 +98,9 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: Me
                     let storage = storage.clone();
                     let metrics = metrics.clone();
                     let llm_client = llm_client.clone();
+                    let thresholds = thresholds.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, storage, metrics, llm_client).await {
+                        if let Err(e) = handle_client(stream, storage, metrics, llm_client, thresholds).await {
                             error!("Client error: {}", e);
                         }
                     });
@@ -88,7 +115,7 @@ pub async fn start_ipc_server(storage: Storage, socket_path: String, metrics: Me
     Ok(())
 }
 
-async fn handle_client(mut stream: UnixStream, storage: Storage, metrics: MetricsHandle, llm_client: Option<LlmClient>) -> Result<()> {
+async fn handle_client(mut stream: UnixStream, storage: Storage, metrics: MetricsHandle, llm_client: Option<LlmClient>, thresholds: ThresholdsConfig) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
     let n = stream.read(&mut buffer).await?;
     
@@ -100,7 +127,7 @@ async fn handle_client(mut stream: UnixStream, storage: Storage, metrics: Metric
     info!("IPC request: {}", request_str.trim());
     
     let response = match serde_json::from_str::<IpcRequest>(&request_str) {
-        Ok(req) => handle_request(req, &storage, &metrics, llm_client.as_ref()).await,
+        Ok(req) => handle_request(req, &storage, &metrics, llm_client.as_ref(), &thresholds).await,
         Err(e) => {
             warn!("Invalid request: {}", e);
             IpcResponse {
@@ -117,16 +144,16 @@ async fn handle_client(mut stream: UnixStream, storage: Storage, metrics: Metric
     Ok(())
 }
 
-async fn handle_request(req: IpcRequest, storage: &Storage, metrics: &MetricsHandle, llm_client: Option<&LlmClient>) -> IpcResponse {
+async fn handle_request(req: IpcRequest, storage: &Storage, metrics: &MetricsHandle, llm_client: Option<&LlmClient>, thresholds: &ThresholdsConfig) -> IpcResponse {
     match req {
-        IpcRequest::Status => handle_status(storage, metrics).await,
+        IpcRequest::Status => handle_status(storage, metrics, llm_client, thresholds).await,
         IpcRequest::List { limit } => handle_list(storage, limit.unwrap_or(20)).await,
         IpcRequest::Show { event_id } => handle_show(storage, &event_id).await,
         IpcRequest::Analyze { event_id } => handle_analyze(storage, &event_id, llm_client).await,
     }
 }
 
-async fn handle_status(storage: &Storage, metrics: &MetricsHandle) -> IpcResponse {
+async fn handle_status(storage: &Storage, metrics: &MetricsHandle, llm_client: Option<&LlmClient>, thresholds: &ThresholdsConfig) -> IpcResponse {
     let uptime_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -135,6 +162,25 @@ async fn handle_status(storage: &Storage, metrics: &MetricsHandle) -> IpcRespons
     let (critical, warning, info) = storage.get_event_counts().await.unwrap_or((0, 0, 0));
     
     let metrics_guard = metrics.read().await;
+    
+    // Get LLM info if available (use cached connection status for performance)
+    let llm_info = if let Some(client) = llm_client {
+        let connected = LLM_CONNECTION_CACHE
+            .get()
+            .map(|cache| cache.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        serde_json::json!({
+            "available": connected,
+            "model": client.model(),
+            "url": client.base_url()
+        })
+    } else {
+        serde_json::json!({
+            "available": false,
+            "model": null,
+            "url": null
+        })
+    };
     
     IpcResponse {
         success: true,
@@ -155,6 +201,14 @@ async fn handle_status(storage: &Storage, metrics: &MetricsHandle) -> IpcRespons
                 "critical": critical,
                 "warning": warning,
                 "info": info
+            },
+            "llm": llm_info,
+            "thresholds": {
+                "cpu_warning": thresholds.cpu_warning,
+                "cpu_critical": thresholds.cpu_critical,
+                "memory_warning": thresholds.memory_warning,
+                "memory_critical": thresholds.memory_critical,
+                "cpu_sustained_count": thresholds.cpu_sustained_count
             }
         }),
     }

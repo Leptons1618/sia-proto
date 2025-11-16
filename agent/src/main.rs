@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tokio::signal;
 use tokio::sync::mpsc;
-use log::info;
+use log::{info, warn};
 
 mod collectors;
 mod analyzer;
@@ -33,23 +33,27 @@ async fn main() -> Result<()> {
     let storage = Storage::new(&config.storage.db_path).await?;
     info!("Storage initialized at {}", config.storage.db_path);
     
-    // Initialize LLM client (optional)
+    // Initialize LLM client (always create, even if connection test fails initially)
+    // This allows the model name to be shown in status even if connection is temporarily down
     let llm_client = LlmClient::new(
         config.llm.ollama_url.clone(),
         config.llm.model.clone(),
     );
     
-    let llm_available = if let Ok(connected) = llm_client.test_connection().await {
-        if connected {
+    // Test connection but don't fail if it's down - we'll retry periodically
+    let llm_available = match llm_client.test_connection().await {
+        Ok(true) => {
             info!("LLM client ready ({})", config.llm.ollama_url);
             Some(llm_client)
-        } else {
-            info!("LLM not available, continuing without AI suggestions");
-            None
         }
-    } else {
-        info!("LLM connection test failed, continuing without AI suggestions");
-        None
+        Ok(false) => {
+            warn!("LLM connection test failed, but will keep client available for status display");
+            Some(llm_client) // Keep client available to show model name
+        }
+        Err(e) => {
+            warn!("LLM connection test error: {}, but will keep client available", e);
+            Some(llm_client) // Keep client available to show model name
+        }
     };
     
     // Create event channel
@@ -58,8 +62,8 @@ async fn main() -> Result<()> {
     // Create shared metrics handle
     let metrics: MetricsHandle = Arc::new(RwLock::new(SystemMetrics::default()));
     
-    // Start collectors
-    start_collectors(tx, config.agent.cpu_interval, metrics.clone()).await?;
+    // Start collectors with configurable thresholds
+    start_collectors(tx, config.agent.cpu_interval, metrics.clone(), config.agent.thresholds.clone()).await?;
     info!("Collectors started");
     
     // Start analyzer
@@ -67,7 +71,7 @@ async fn main() -> Result<()> {
     info!("Analyzer started");
     
     // Start IPC server
-    start_ipc_server(storage.clone(), config.ipc.socket_path.clone(), metrics, llm_available).await?;
+    start_ipc_server(storage.clone(), config.ipc.socket_path.clone(), metrics, llm_available, config.agent.thresholds.clone()).await?;
     info!("IPC server started on {}", config.ipc.socket_path);
     
     info!("SIA agent is running");

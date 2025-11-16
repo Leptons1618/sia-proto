@@ -1,12 +1,18 @@
 use sysinfo::{System, SystemExt, ProcessExt, CpuExt, PidExt};
 use tokio::time::{sleep, Duration};
 use tokio::sync::mpsc;
-use common::Event;
+use common::{Event, ThresholdsConfig};
 use log::{info, warn};
 use crate::ipc::MetricsHandle;
 
-pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metrics: MetricsHandle) -> anyhow::Result<()> {
+pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metrics: MetricsHandle, thresholds: ThresholdsConfig) -> anyhow::Result<()> {
     info!("Starting collectors with {}s CPU interval", cpu_interval);
+    info!("Thresholds: CPU warning={}% critical={}%, Memory warning={}% critical={}%", 
+          thresholds.cpu_warning, thresholds.cpu_critical, 
+          thresholds.memory_warning, thresholds.memory_critical);
+    
+    // Clone thresholds for CPU collector
+    let thresholds_cpu = thresholds.clone();
     
     // CPU collector
     let tx_cpu = tx.clone();
@@ -33,17 +39,17 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metric
                 metrics_guard.cpu_usage = cpu_usage;
             }
             
-            // Generate events based on thresholds
-            if cpu_usage > 95.0 {
-                warn!("Critical CPU usage: {:.1}%", cpu_usage);
-                let event = create_cpu_event(cpu_usage, "CRITICAL", &sys);
+            // Generate events based on configurable thresholds
+            if cpu_usage > thresholds_cpu.cpu_critical {
+                warn!("Critical CPU usage: {:.1}% (threshold: {:.1}%)", cpu_usage, thresholds_cpu.cpu_critical);
+                let event = create_cpu_event(cpu_usage, "CRITICAL", &sys, thresholds_cpu.cpu_critical);
                 let _ = tx_cpu.send(event).await;
                 high_cpu_count = 0;
-            } else if cpu_usage > 80.0 {
+            } else if cpu_usage > thresholds_cpu.cpu_warning {
                 high_cpu_count += 1;
-                if high_cpu_count >= 2 {
-                    warn!("High CPU usage: {:.1}%", cpu_usage);
-                    let event = create_cpu_event(cpu_usage, "WARNING", &sys);
+                if high_cpu_count >= thresholds_cpu.cpu_sustained_count {
+                    warn!("High CPU usage: {:.1}% (threshold: {:.1}%)", cpu_usage, thresholds_cpu.cpu_warning);
+                    let event = create_cpu_event(cpu_usage, "WARNING", &sys, thresholds_cpu.cpu_warning);
                     let _ = tx_cpu.send(event).await;
                 }
             } else {
@@ -63,6 +69,7 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metric
     // Memory collector
     let tx_mem = tx.clone();
     let metrics_mem = metrics.clone();
+    let thresholds_mem = thresholds.clone();
     tokio::spawn(async move {
         let mut sys = System::new_all();
         
@@ -81,13 +88,14 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metric
                 metrics_guard.memory_percent = mem_percent;
             }
             
-            if mem_percent > 95.0 {
-                warn!("Critical memory usage: {:.1}%", mem_percent);
-                let event = create_memory_event(mem_percent, used_mem, total_mem, "CRITICAL", &sys);
+            // Generate events based on configurable thresholds
+            if mem_percent > thresholds_mem.memory_critical {
+                warn!("Critical memory usage: {:.1}% (threshold: {:.1}%)", mem_percent, thresholds_mem.memory_critical);
+                let event = create_memory_event(mem_percent, used_mem, total_mem, "CRITICAL", &sys, thresholds_mem.memory_critical);
                 let _ = tx_mem.send(event).await;
-            } else if mem_percent > 85.0 {
-                warn!("High memory usage: {:.1}%", mem_percent);
-                let event = create_memory_event(mem_percent, used_mem, total_mem, "WARNING", &sys);
+            } else if mem_percent > thresholds_mem.memory_warning {
+                warn!("High memory usage: {:.1}% (threshold: {:.1}%)", mem_percent, thresholds_mem.memory_warning);
+                let event = create_memory_event(mem_percent, used_mem, total_mem, "WARNING", &sys, thresholds_mem.memory_warning);
                 let _ = tx_mem.send(event).await;
             }
             
@@ -98,7 +106,7 @@ pub async fn start_collectors(tx: mpsc::Sender<Event>, cpu_interval: u64, metric
     Ok(())
 }
 
-fn create_cpu_event(cpu_usage: f32, severity: &str, sys: &System) -> Event {
+fn create_cpu_event(cpu_usage: f32, severity: &str, sys: &System, threshold: f32) -> Event {
     use chrono::Utc;
     use serde_json::json;
     
@@ -121,7 +129,7 @@ fn create_cpu_event(cpu_usage: f32, severity: &str, sys: &System) -> Event {
     });
     
     let evidence = json!({
-        "threshold": if severity == "CRITICAL" { 95.0 } else { 80.0 },
+        "threshold": threshold,
         "sustained": severity == "WARNING",
         "timestamp": ts.clone()
     });
@@ -138,7 +146,7 @@ fn create_cpu_event(cpu_usage: f32, severity: &str, sys: &System) -> Event {
     }
 }
 
-fn create_memory_event(mem_percent: f32, used: u64, total: u64, severity: &str, sys: &System) -> Event {
+fn create_memory_event(mem_percent: f32, used: u64, total: u64, severity: &str, sys: &System, threshold: f32) -> Event {
     use chrono::Utc;
     use serde_json::json;
     
@@ -163,7 +171,7 @@ fn create_memory_event(mem_percent: f32, used: u64, total: u64, severity: &str, 
     });
     
     let evidence = json!({
-        "threshold": if severity == "CRITICAL" { 95.0 } else { 85.0 },
+        "threshold": threshold,
         "timestamp": ts.clone()
     });
     

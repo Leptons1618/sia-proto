@@ -25,6 +25,13 @@ struct OllamaResponse {
 }
 
 impl LlmClient {
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
     pub fn new(base_url: String, model: String) -> Self {
         Self {
             client: Client::builder()

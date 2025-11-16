@@ -22,6 +22,9 @@ fi
 ORIGINAL_USER="${SUDO_USER:-$USER}"
 ORIGINAL_HOME=$(eval echo ~$ORIGINAL_USER)
 
+# Get absolute path to project directory (works better in WSL)
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Check if cargo is available
 if ! command -v cargo &> /dev/null; then
     echo "❌ Cargo not found. Please install Rust first:"
@@ -33,9 +36,11 @@ fi
 echo "📦 Building release binaries..."
 if [ -n "$SUDO_USER" ]; then
     # Running under sudo - build as the original user
-    su - "$SUDO_USER" -c "cd '$PWD' && cargo build --release --workspace"
+    # Use sudo -u instead of su - for better WSL compatibility
+    sudo -u "$SUDO_USER" bash -c "cd '$PROJECT_DIR' && cargo build --release --workspace"
 else
     # Running as root directly
+    cd "$PROJECT_DIR"
     cargo build --release --workspace
 fi
 
@@ -60,9 +65,37 @@ chmod 755 "$SOCKET_DIR"
 # Install binaries
 echo "🔧 Installing binaries to $INSTALL_DIR..."
 cp target/release/sia-agent "$INSTALL_DIR/"
-cp target/release/sia-cli "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/sia-agent"
-chmod +x "$INSTALL_DIR/sia-cli"
+
+# Install TypeScript CLI
+echo "🔧 Installing TypeScript CLI..."
+cd "$PROJECT_DIR/cli-ts"
+if [ -n "$SUDO_USER" ]; then
+    sudo -u "$SUDO_USER" bash -c "cd '$PROJECT_DIR/cli-ts' && npm install && npm run build"
+else
+    npm install && npm run build
+fi
+
+# Create CLI symlink or wrapper script
+if [ ! -f "$INSTALL_DIR/sia-cli" ]; then
+    cat > "$INSTALL_DIR/sia-cli" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")/../lib/sia/cli-ts" 2>/dev/null || cd "/usr/lib/sia/cli-ts" 2>/dev/null || {
+    echo "Error: CLI not found. Please reinstall SIA."
+    exit 1
+}
+node dist/index.js "$@"
+EOF
+    chmod +x "$INSTALL_DIR/sia-cli"
+    
+    # Copy CLI files to system location
+    mkdir -p /usr/lib/sia/cli-ts
+    cp -r "$PROJECT_DIR/cli-ts/dist" /usr/lib/sia/cli-ts/
+    cp "$PROJECT_DIR/cli-ts/package.json" /usr/lib/sia/cli-ts/
+    # Install production dependencies only
+    cd /usr/lib/sia/cli-ts
+    npm install --production --no-save
+fi
 
 # Copy default config if doesn't exist
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then
@@ -80,13 +113,14 @@ sed -i "s|db_path = \"./sia.db\"|db_path = \"/var/lib/sia/sia.db\"|g" "$CONFIG_D
 # Initialize database with schema
 if [ ! -f "$DATA_DIR/sia.db" ]; then
     echo "💾 Initializing database..."
-    SCHEMA_FILE="$(cd "$(dirname "$0")" && pwd)/sql/schema.sql"
-    cat "$SCHEMA_FILE" | su -s /bin/bash sia -c "sqlite3 $DATA_DIR/sia.db"
+    SCHEMA_FILE="$PROJECT_DIR/sql/schema.sql"
+    cat "$SCHEMA_FILE" | sudo -u sia sqlite3 "$DATA_DIR/sia.db"
 fi
 
-# Install systemd service
-echo "🔌 Installing systemd service..."
-cat > "$SERVICE_DIR/sia-agent.service" <<EOF
+# Install systemd service (if systemd is available)
+if command -v systemctl &> /dev/null; then
+    echo "🔌 Installing systemd service..."
+    cat > "$SERVICE_DIR/sia-agent.service" <<EOF
 [Unit]
 Description=System Insight Agent
 Documentation=https://github.com/Leptons1618/sia-proto
@@ -102,6 +136,10 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=sia-agent
+
+# Runtime directory (creates /run/sia automatically)
+RuntimeDirectory=sia
+RuntimeDirectoryMode=0755
 
 # Working directory
 WorkingDirectory=$DATA_DIR
@@ -128,22 +166,33 @@ TasksMax=50
 WantedBy=multi-user.target
 EOF
 
-# Set permissions
-chmod 644 "$SERVICE_DIR/sia-agent.service"
-chown root:root "$SERVICE_DIR/sia-agent.service"
+    # Set permissions
+    chmod 644 "$SERVICE_DIR/sia-agent.service"
+    chown root:root "$SERVICE_DIR/sia-agent.service"
 
-# Reload systemd
-echo "🔄 Reloading systemd daemon..."
-systemctl daemon-reload
+    # Reload systemd
+    echo "🔄 Reloading systemd daemon..."
+    systemctl daemon-reload
+else
+    echo "⚠️  systemd not available (common in WSL). Skipping service installation."
+    echo "   You can run sia-agent manually or set up your own service manager."
+fi
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "📋 Next steps:"
-echo "   1. Start the service:     sudo systemctl start sia-agent"
-echo "   2. Enable on boot:        sudo systemctl enable sia-agent"
-echo "   3. Check status:          sia-cli status"
-echo "   4. View logs:             sudo journalctl -u sia-agent -f"
+if command -v systemctl &> /dev/null; then
+    echo "📋 Next steps:"
+    echo "   1. Start the service:     sudo systemctl start sia-agent"
+    echo "   2. Enable on boot:        sudo systemctl enable sia-agent"
+    echo "   3. Check status:          sia-cli status"
+    echo "   4. View logs:             sudo journalctl -u sia-agent -f"
+else
+    echo "📋 Next steps (systemd not available):"
+    echo "   1. Start manually:        sudo -u sia $INSTALL_DIR/sia-agent"
+    echo "   2. Or run in background:  sudo -u sia $INSTALL_DIR/sia-agent &"
+    echo "   3. Check status:          sia-cli status"
+fi
 echo ""
 echo "📝 Configuration: $CONFIG_DIR/config.toml"
 echo "💾 Database:      $DATA_DIR/sia.db"

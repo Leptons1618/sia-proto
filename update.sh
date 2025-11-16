@@ -17,34 +17,52 @@ fi
 # Get the original user (who ran sudo)
 ORIGINAL_USER="${SUDO_USER:-$USER}"
 
-# Check if service is running
-if systemctl is-active --quiet sia-agent; then
+# Get absolute path to project directory (works better in WSL)
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check if service is running (may not be available in WSL)
+SERVICE_WAS_RUNNING=false
+if command -v systemctl &> /dev/null && systemctl is-active --quiet sia-agent 2>/dev/null; then
     echo "🛑 Stopping sia-agent service..."
     systemctl stop sia-agent
     SERVICE_WAS_RUNNING=true
-else
-    SERVICE_WAS_RUNNING=false
 fi
 
 # Build release binaries as the original user (not root)
 echo "📦 Building release binaries..."
 if [ -n "$SUDO_USER" ]; then
     # Running under sudo - build as the original user
-    su - "$SUDO_USER" -c "cd '$PWD' && cargo build --release --workspace"
+    # Use sudo -u instead of su - for better WSL compatibility
+    sudo -u "$SUDO_USER" bash -c "cd '$PROJECT_DIR' && cargo build --release --workspace"
 else
     # Running as root directly
+    cd "$PROJECT_DIR"
     cargo build --release --workspace
 fi
 
 # Install binaries
 echo "🔧 Installing updated binaries to $INSTALL_DIR..."
 cp target/release/sia-agent "$INSTALL_DIR/"
-cp target/release/sia-cli "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/sia-agent"
-chmod +x "$INSTALL_DIR/sia-cli"
 
-# Restart service if it was running
-if [ "$SERVICE_WAS_RUNNING" = true ]; then
+# Update TypeScript CLI
+echo "🔧 Updating TypeScript CLI..."
+cd "$PROJECT_DIR/cli-ts"
+if [ -n "$SUDO_USER" ]; then
+    sudo -u "$SUDO_USER" bash -c "cd '$PROJECT_DIR/cli-ts' && npm install && npm run build"
+else
+    npm install && npm run build
+fi
+
+# Update CLI files
+mkdir -p /usr/lib/sia/cli-ts
+cp -r "$PROJECT_DIR/cli-ts/dist" /usr/lib/sia/cli-ts/
+cp "$PROJECT_DIR/cli-ts/package.json" /usr/lib/sia/cli-ts/
+cd /usr/lib/sia/cli-ts
+npm install --production --no-save
+
+# Restart service if it was running (may not be available in WSL)
+if [ "$SERVICE_WAS_RUNNING" = true ] && command -v systemctl &> /dev/null; then
     echo "▶️  Starting sia-agent service..."
     systemctl start sia-agent
     sleep 1

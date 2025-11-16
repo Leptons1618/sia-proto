@@ -17,7 +17,39 @@ pub struct AgentConfig {
     pub cpu_interval: u64,
     pub proc_interval: u64,
     pub event_ring_capacity: usize,
+    #[serde(default = "default_thresholds")]
+    pub thresholds: ThresholdsConfig,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThresholdsConfig {
+    #[serde(default = "default_cpu_warning")]
+    pub cpu_warning: f32,
+    #[serde(default = "default_cpu_critical")]
+    pub cpu_critical: f32,
+    #[serde(default = "default_memory_warning")]
+    pub memory_warning: f32,
+    #[serde(default = "default_memory_critical")]
+    pub memory_critical: f32,
+    #[serde(default = "default_cpu_sustained_count")]
+    pub cpu_sustained_count: u32,
+}
+
+fn default_thresholds() -> ThresholdsConfig {
+    ThresholdsConfig {
+        cpu_warning: 80.0,
+        cpu_critical: 95.0,
+        memory_warning: 85.0,
+        memory_critical: 95.0,
+        cpu_sustained_count: 2,
+    }
+}
+
+fn default_cpu_warning() -> f32 { 80.0 }
+fn default_cpu_critical() -> f32 { 95.0 }
+fn default_memory_warning() -> f32 { 85.0 }
+fn default_memory_critical() -> f32 { 95.0 }
+fn default_cpu_sustained_count() -> u32 { 2 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcConfig {
